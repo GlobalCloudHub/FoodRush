@@ -1,0 +1,108 @@
+.orders-page { padding: 40px 32px; }
+.orders-container { max-width: 800px; margin: 0 auto; }
+.orders-title { font-size: 2rem; font-weight: 800; margin-bottom: 32px; }
+
+.orders-list { display: flex; flex-direction: column; gap: 20px; }
+
+.order-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  transition: border-color 0.2s;
+}
+.order-card:hover { border-color: rgba(255,77,0,0.2); }
+
+.order-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.order-id {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-right: 10px;
+}
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+}
+.status-badge.status-delivered { color: #4ade80; border-color: rgba(74,222,128,0.3); background: rgba(74,222,128,0.08); }
+.status-badge.status-cancelled { color: #f87171; border-color: rgba(248,113,113,0.3); background: rgba(248,113,113,0.08); }
+.status-badge.status-out_for_delivery { color: var(--accent2); border-color: rgba(255,140,66,0.3); background: rgba(255,140,66,0.08); }
+
+.order-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+.dot { opacity: 0.4; }
+
+/* Progress track */
+.progress-track {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin-bottom: 16px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.progress-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  min-width: 70px;
+}
+.progress-step::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--border);
+}
+.progress-step.done::after { background: var(--accent); }
+.progress-step:last-child::after { display: none; }
+
+.step-dot {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 2px solid var(--border);
+  position: relative;
+  z-index: 1;
+  transition: all 0.3s;
+}
+.progress-step.done .step-dot { background: var(--accent); border-color: var(--accent); }
+.progress-step.current .step-dot { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 10px var(--accent); }
+
+.step-label {
+  font-size: 0.65rem;
+  color: var(--muted);
+  margin-top: 6px;
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.order-address {
+  font-size: 0.82rem;
+  color: var(--muted);
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+}

@@ -1,0 +1,105 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: foodrush-postgres
+    environment:
+      POSTGRES_USER: foodrush
+      POSTGRES_PASSWORD: foodrush123
+      POSTGRES_DB: foodrush
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U foodrush"]
+      interval: 5s; timeout: 5s; retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: foodrush-redis
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 5s; timeout: 3s; retries: 5
+
+  user-service:
+    build: ./services/user-service
+    container_name: foodrush-user-service
+    env_file: .env.local
+    environment:
+      PORT: 3001
+    ports: ["3001:3001"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    restart: unless-stopped
+
+  restaurant-service:
+    build: ./services/restaurant-service
+    container_name: foodrush-restaurant-service
+    env_file: .env.local
+    environment:
+      PORT: 3002
+    ports: ["3002:3002"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    restart: unless-stopped
+
+  menu-service:
+    build: ./services/menu-service
+    container_name: foodrush-menu-service
+    env_file: .env.local
+    environment:
+      PORT: 3003
+    ports: ["3003:3003"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    restart: unless-stopped
+
+  order-service:
+    build: ./services/order-service
+    container_name: foodrush-order-service
+    env_file: .env.local
+    environment:
+      PORT: 3004
+      MENU_SERVICE_URL: http://menu-service:3003
+    ports: ["3004:3004"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    restart: unless-stopped
+
+  api-gateway:
+    build: ./services/api-gateway
+    container_name: foodrush-api-gateway
+    environment:
+      PORT: 8080
+      JWT_SECRET: supersecretjwtkey123-local-dev
+      USER_SERVICE_URL: http://user-service:3001
+      RESTAURANT_SERVICE_URL: http://restaurant-service:3002
+      MENU_SERVICE_URL: http://menu-service:3003
+      ORDER_SERVICE_URL: http://order-service:3004
+    ports: ["8080:8080"]
+    depends_on:
+      - user-service
+      - restaurant-service
+      - menu-service
+      - order-service
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_API_URL: http://localhost:8080
+    container_name: foodrush-frontend
+    ports: ["3000:80"]
+    depends_on: [api-gateway]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

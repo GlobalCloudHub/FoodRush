@@ -1,0 +1,71 @@
+# ── Run against Azure resources ───────────────────────────────────────────────
+# Usage:
+#   cp .env.azure .env
+#   docker compose -f docker-compose.azure.yml up --build
+version: "3.9"
+
+services:
+  user-service:
+    build: ./services/user-service
+    container_name: foodrush-user-service
+    env_file: .env
+    environment:
+      PORT: 3001
+    ports: ["3001:3001"]
+    restart: unless-stopped
+
+  restaurant-service:
+    build: ./services/restaurant-service
+    container_name: foodrush-restaurant-service
+    env_file: .env
+    environment:
+      PORT: 3002
+    ports: ["3002:3002"]
+    restart: unless-stopped
+
+  menu-service:
+    build: ./services/menu-service
+    container_name: foodrush-menu-service
+    env_file: .env
+    environment:
+      PORT: 3003
+    ports: ["3003:3003"]
+    restart: unless-stopped
+
+  order-service:
+    build: ./services/order-service
+    container_name: foodrush-order-service
+    env_file: .env
+    environment:
+      PORT: 3004
+      MENU_SERVICE_URL: http://menu-service:3003
+    ports: ["3004:3004"]
+    restart: unless-stopped
+
+  api-gateway:
+    build: ./services/api-gateway
+    container_name: foodrush-api-gateway
+    env_file: .env
+    environment:
+      PORT: 8080
+      USER_SERVICE_URL: http://user-service:3001
+      RESTAURANT_SERVICE_URL: http://restaurant-service:3002
+      MENU_SERVICE_URL: http://menu-service:3003
+      ORDER_SERVICE_URL: http://order-service:3004
+    ports: ["8080:8080"]
+    depends_on:
+      - user-service
+      - restaurant-service
+      - menu-service
+      - order-service
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_API_URL: http://localhost:8080
+    container_name: foodrush-frontend
+    ports: ["3000:80"]
+    depends_on: [api-gateway]
+    restart: unless-stopped
