@@ -10,6 +10,7 @@
     "@fastify/swagger-ui": "^4.0.1",
     "fastify": "^4.28.1",
     "pg": "^8.12.0",
+    "@azure/identity": "^4.0.0",
     "redis": "^4.6.14"
   }
 }
