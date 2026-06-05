@@ -8,6 +8,21 @@ export default function Navbar() {
   const { count } = useCart()
   const navigate = useNavigate()
 
+  // 🔥 THE ULTIMATE FIX: Read the exact role directly from the secure JWT Token!
+  let isAdmin = false;
+  const token = localStorage.getItem('token');
+  if (token) {
+    try {
+      // Decode the token payload right here in the browser
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      if (payload.role === 'admin' || payload.role === 'Admin') {
+        isAdmin = true;
+      }
+    } catch (e) {
+      console.error("Token read error", e);
+    }
+  }
+
   return (
     <nav className="navbar">
       <Link to="/" className="navbar-brand">
@@ -19,9 +34,14 @@ export default function Navbar() {
         {user ? (
           <>
             <Link to="/orders" className="nav-link">My Orders</Link>
-            {user.role === 'admin' && (
-              <Link to="/admin" className="nav-link admin-link">⚙️ Admin</Link>
+            
+            {/* If the token says you are an admin, show the button! */}
+            {isAdmin && (
+              <Link to="/admin" className="nav-link admin-link" style={{ fontWeight: 'bold', color: '#92400e', background: '#fef3c7', padding: '5px 10px', borderRadius: '5px' }}>
+                ⚙️ Admin
+              </Link>
             )}
+            
             <button className="btn btn-ghost" onClick={() => { logout(); navigate('/') }}>Logout</button>
           </>
         ) : (

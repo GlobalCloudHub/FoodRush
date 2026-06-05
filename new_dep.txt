@@ -1,0 +1,182 @@
+az group delete --name rg-foodrush-dev-cin --yes --no-wait
+
+<#
+.SYNOPSIS
+  FoodRush Enterprise God-Mode: Internal VNet, Private DB, Internal ACA, High-Spec Containers, pgAdmin, and Windows Jumpbox.
+#>
+
+$ErrorActionPreference = "Stop"
+
+function Clean-Text($InputString) {
+    if ([string]::IsNullOrWhiteSpace($InputString)) { return "" }
+    return ($InputString -join "").Trim() -replace "`r","" -replace "`n",""
+}
+
+# ─── Configuration ───────────────────────────────────────────────────────────
+$Project       = "foodrush"
+$Env           = "dev"
+$Location      = "centralindia" 
+$LocShort      = "cin"
+
+$ResourceGroup = "rg-$Project-$Env-$LocShort"
+$VNetName      = "vnet-$Project-$Env"
+$AcrName       = "acr$Project$Env$LocShort"
+$AcaEnvName    = "cae-$Project$Env-$LocShort" 
+$PgServer      = "psql-$Project-$Env-$LocShort"
+$EvhNsName     = "evhns-$Project-$Env-$LocShort"
+$LawName       = "law-$Project$Env-$LocShort"
+$VmName        = "vm-jumpbox"
+
+# Global Credentials 
+$AdminUser     = "azureuser"
+$AdminPass     = "FoodRush@2026#Secure!" 
+$PgDbName      = "foodrush"
+$JwtSecret     = "supersecretjwtkey123-cloud-dev"
+
+# URL-Encoded DB String (Double-escaped with %% for the Windows CMD execution)
+$DbUrl         = "postgresql://${AdminUser}:FoodRush%%402026%%23Secure%%21@${PgServer}.postgres.database.azure.com:5432/${PgDbName}?sslmode=require"
+$RedisUrl      = "redis://redis-cache:6379"
+
+Write-Host "🚀 Starting High-Spec Enterprise Deployment for FoodRush..." -ForegroundColor Cyan
+
+# ─── 1. Core Networking & Resource Group ─────────────────────────────────────
+Write-Host "`n📁 Creating Resource Group..."
+az group create --name $ResourceGroup --location $Location --output none
+
+Write-Host "🌐 Creating VNet and 3 Isolated Subnets..."
+az network vnet create --resource-group $ResourceGroup --name $VNetName --location $Location --address-prefix "10.0.0.0/16" --output none
+
+az network vnet subnet create --resource-group $ResourceGroup --vnet-name $VNetName --name "snet-postgres" `
+    --address-prefix "10.0.1.0/24" --delegations "Microsoft.DBforPostgreSQL/flexibleServers" --output none
+
+az network vnet subnet create --resource-group $ResourceGroup --vnet-name $VNetName --name "snet-aca" `
+    --address-prefix "10.0.2.0/23" --delegations "Microsoft.App/environments" --output none
+
+az network vnet subnet create --resource-group $ResourceGroup --vnet-name $VNetName --name "snet-vm" `
+    --address-prefix "10.0.4.0/24" --output none
+
+# ─── 2. Deploy Windows Jumpbox VM ────────────────────────────────────────────
+Write-Host "`n💻 Provisioning Windows Server Jumpbox VM..." -ForegroundColor Yellow
+az vm create --resource-group $ResourceGroup --name $VmName --image "Win2022Datacenter" `
+    --vnet-name $VNetName --subnet "snet-vm" --admin-username $AdminUser --admin-password $AdminPass `
+    --public-ip-sku Standard --output none
+
+$VmPublicIp = Clean-Text (az vm show --show-details --resource-group $ResourceGroup --name $VmName --query publicIps -o tsv)
+
+# ─── 3. Database Provisioning ────────────────────────────────────────────────
+Write-Host "`n🐘 Provisioning Private PostgreSQL Server (Takes ~5-7 mins)..." -ForegroundColor Yellow
+$DnsZone = "$Project-$Env.private.postgres.database.azure.com"
+az network private-dns zone create --resource-group $ResourceGroup --name $DnsZone --output none
+
+$VNetId = Clean-Text (az network vnet show --resource-group $ResourceGroup --name $VNetName --query id -o tsv)
+az network private-dns link vnet create --resource-group $ResourceGroup --zone-name $DnsZone `
+    --name "dns-link-postgres" --virtual-network $VNetId --registration-enabled false --output none
+
+$SnetPgId = Clean-Text (az network vnet subnet show --resource-group $ResourceGroup --vnet-name $VNetName --name "snet-postgres" --query id -o tsv)
+$DnsZoneId = Clean-Text (az network private-dns zone show --resource-group $ResourceGroup --name $DnsZone --query id -o tsv)
+
+az postgres flexible-server create `
+    --resource-group $ResourceGroup --name $PgServer --location $Location `
+    --admin-user $AdminUser --admin-password $AdminPass `
+    --sku-name "Standard_B1ms" --tier "Burstable" --storage-size 32 --version 16 `
+    --subnet $SnetPgId --private-dns-zone $DnsZoneId --yes --output none
+
+az postgres flexible-server db create --resource-group $ResourceGroup --server-name $PgServer --database-name $PgDbName --output none
+az postgres flexible-server parameter set --resource-group $ResourceGroup --server-name $PgServer --name "azure.extensions" --value "UUID-OSSP,PGCRYPTO" --output none
+
+# ─── 4. Internal Container Apps Environment & Registry ───────────────────────
+Write-Host "`n📦 Provisioning INTERNAL Container Environment & ACR..." -ForegroundColor Yellow
+az acr create --resource-group $ResourceGroup --name $AcrName --sku Basic --admin-enabled true --output none
+$AcrLoginServer = Clean-Text (az acr show --name $AcrName --query loginServer -o tsv)
+
+az monitor log-analytics workspace create --resource-group $ResourceGroup --workspace-name $LawName --location $Location --output none
+$LawClientId = Clean-Text (az monitor log-analytics workspace show --resource-group $ResourceGroup --workspace-name $LawName --query customerId -o tsv)
+$LawSecret = Clean-Text (az monitor log-analytics workspace get-shared-keys --resource-group $ResourceGroup --workspace-name $LawName --query primarySharedKey -o tsv)
+
+$SnetAcaId = Clean-Text (az network vnet subnet show --resource-group $ResourceGroup --vnet-name $VNetName --name "snet-aca" --query id -o tsv)
+az containerapp env create --name $AcaEnvName --resource-group $ResourceGroup --location $Location `
+    --logs-workspace-id $LawClientId --logs-workspace-key $LawSecret `
+    --infrastructure-subnet-resource-id $SnetAcaId --internal-only true --output none
+
+Write-Host "🔀 Configuring Private DNS for Container Apps..." -ForegroundColor Yellow
+$AcaDefaultDomain = Clean-Text (az containerapp env show --name $AcaEnvName --resource-group $ResourceGroup --query properties.defaultDomain -o tsv)
+$AcaStaticIp = Clean-Text (az containerapp env show --name $AcaEnvName --resource-group $ResourceGroup --query properties.staticIp -o tsv)
+
+az network private-dns zone create --resource-group $ResourceGroup --name $AcaDefaultDomain --output none
+az network private-dns link vnet create --resource-group $ResourceGroup --zone-name $AcaDefaultDomain --name "dns-link-aca" --virtual-network $VNetId --registration-enabled false --output none
+az network private-dns record-set a add-record --resource-group $ResourceGroup --zone-name $AcaDefaultDomain --record-set-name "*" --ipv4-address $AcaStaticIp --output none
+
+Write-Host "🔴 Provisioning Internal Redis..." -ForegroundColor Yellow
+az containerapp create --name "redis-cache" --resource-group $ResourceGroup --environment $AcaEnvName `
+    --image "redis:alpine" --ingress internal --target-port 6379 --transport tcp --exposed-port 6379 --output none
+
+# ─── 5. Event Hubs ───────────────────────────────────────────────────────────
+Write-Host "`n📨 Provisioning Event Hubs..." -ForegroundColor Yellow
+az eventhubs namespace create --resource-group $ResourceGroup --name $EvhNsName --location $Location --sku Standard --capacity 1 --output none
+foreach ($Hub in @("evh-orders", "evh-order-status")) {
+    az eventhubs eventhub create --resource-group $ResourceGroup --namespace-name $EvhNsName --name $Hub --partition-count 2 --output none
+    az eventhubs eventhub authorization-rule create --resource-group $ResourceGroup --namespace-name $EvhNsName --eventhub-name $Hub --name "send" --rights Send --output none
+}
+$EvhOrdersSend = Clean-Text (az eventhubs eventhub authorization-rule keys list --resource-group $ResourceGroup --namespace-name $EvhNsName --eventhub-name "evh-orders" --name "send" --query primaryConnectionString -o tsv)
+$EvhStatusSend = Clean-Text (az eventhubs eventhub authorization-rule keys list --resource-group $ResourceGroup --namespace-name $EvhNsName --eventhub-name "evh-order-status" --name "send" --query primaryConnectionString -o tsv)
+
+# ─── 6. Build and Deploy Microservices (HIGH-SPEC ENABLED) ───────────────────
+Write-Host "`n🔐 Logging Docker into Azure Container Registry ($AcrName)..." -ForegroundColor Yellow
+az acr login --name $AcrName
+
+function Deploy-App ($AppName, $Path, $Port, $Cpu, $Memory, $EnvVars, $Secrets, $Ingress) {
+    Write-Host "`n   -> Building & Deploying $AppName ($Cpu vCPU, $Memory RAM)..." -ForegroundColor Cyan
+    docker build -t "$AcrLoginServer/foodrush/$($AppName):latest" $Path 
+    docker push "$AcrLoginServer/foodrush/$($AppName):latest"
+    
+    $cmdStr = "az containerapp create --name $AppName --resource-group $ResourceGroup --environment $AcaEnvName --image `"$AcrLoginServer/foodrush/$($AppName):latest`" --registry-server $AcrLoginServer --ingress $Ingress --target-port $Port --cpu $Cpu --memory $Memory --secrets $Secrets --env-vars $EnvVars --output none"
+    $cmdStr | Out-File -FilePath "deploy_temp.cmd" -Encoding ASCII
+    cmd.exe /c "deploy_temp.cmd"
+        
+    $fqdn = Clean-Text (az containerapp show --name $AppName --resource-group $ResourceGroup --query properties.configuration.ingress.fqdn -o tsv)
+    return "https://$fqdn"
+}
+
+$SharedSecrets = "database-url=`"$DbUrl`" redis-url=`"$RedisUrl`" jwt-secret=`"$JwtSecret`""
+$BaseEnv = "DATABASE_URL=secretref:database-url REDIS_URL=secretref:redis-url JWT_SECRET=secretref:jwt-secret"
+
+$UserUrl = Deploy-App "user-service" "./services/user-service" 3001 2.0 "4.0Gi" "$BaseEnv PORT=3001" $SharedSecrets "internal"
+$RestUrl = Deploy-App "restaurant-service" "./services/restaurant-service" 3002 2.0 "4.0Gi" "$BaseEnv PORT=3002" $SharedSecrets "internal"
+$MenuUrl = Deploy-App "menu-service" "./services/menu-service" 3003 2.0 "4.0Gi" "$BaseEnv PORT=3003" $SharedSecrets "internal"
+
+$OrderSecrets = "$SharedSecrets evh-orders-send=`"$EvhOrdersSend`" evh-status-send=`"$EvhStatusSend`""
+$OrderEnv = "$BaseEnv PORT=3004 MENU_SERVICE_URL=`"$MenuUrl`" EVH_ORDERS_SEND_CONN=secretref:evh-orders-send EVH_STATUS_SEND_CONN=secretref:evh-status-send"
+$OrderUrl = Deploy-App "order-service" "./services/order-service" 3004 4.0 "8.0Gi" $OrderEnv $OrderSecrets "internal"
+
+$GatewayEnv = "PORT=8080 JWT_SECRET=secretref:jwt-secret USER_SERVICE_URL=`"$UserUrl`" RESTAURANT_SERVICE_URL=`"$RestUrl`" MENU_SERVICE_URL=`"$MenuUrl`" ORDER_SERVICE_URL=`"$OrderUrl`""
+$GatewaySecrets = "jwt-secret=`"$JwtSecret`""
+$GatewayUrl = Deploy-App "api-gateway" "./services/api-gateway" 8080 2.0 "4.0Gi" $GatewayEnv $GatewaySecrets "internal" 
+
+Write-Host "`n   -> Building & Deploying frontend..." -ForegroundColor Cyan
+docker build --build-arg REACT_APP_API_URL=$GatewayUrl -t "$AcrLoginServer/foodrush/frontend:latest" ./frontend
+docker push "$AcrLoginServer/foodrush/frontend:latest"
+
+$frontendCmd = "az containerapp create --name frontend --resource-group $ResourceGroup --environment $AcaEnvName --image `"$AcrLoginServer/foodrush/frontend:latest`" --registry-server $AcrLoginServer --ingress external --target-port 80 --cpu 1.0 --memory 2.0Gi --output none"
+$frontendCmd | Out-File -FilePath "deploy_temp.cmd" -Encoding ASCII
+cmd.exe /c "deploy_temp.cmd"
+
+$FrontendFqdn = Clean-Text (az containerapp show --name "frontend" --resource-group $ResourceGroup --query properties.configuration.ingress.fqdn -o tsv)
+if (Test-Path "deploy_temp.cmd") { Remove-Item "deploy_temp.cmd" }
+
+# ─── 7. Provision pgAdmin (Internal Web UI) ──────────────────────────────────
+Write-Host "`n🐘 Provisioning pgAdmin (Internal UI)..." -ForegroundColor Yellow
+$pgAdminCmdStr = "az containerapp create --name pgadmin --resource-group $ResourceGroup --environment $AcaEnvName --image `"dpage/pgadmin4:latest`" --target-port 8080 --ingress internal --env-vars `"PGADMIN_DEFAULT_EMAIL=admin@foodrush.com`" `"PGADMIN_DEFAULT_PASSWORD=FoodRushAdmin123!`" `"PGADMIN_LISTEN_PORT=8080`" --output none"
+$pgAdminCmdStr | Out-File -FilePath "deploy_pgadmin_temp.cmd" -Encoding ASCII
+cmd.exe /c "deploy_pgadmin_temp.cmd"
+if (Test-Path "deploy_pgadmin_temp.cmd") { Remove-Item "deploy_pgadmin_temp.cmd" }
+
+$PgAdminFqdn = Clean-Text (az containerapp show --name pgadmin --resource-group $ResourceGroup --query properties.configuration.ingress.fqdn -o tsv)
+
+Write-Host "`n🎉 High-Spec Enterprise Deployment Complete!" -ForegroundColor Green
+Write-Host "=========================================================="
+Write-Host "💻 Windows VM Jumpbox IP  : $VmPublicIp"
+Write-Host "----------------------------------------------------------"
+Write-Host "🔒 INTERNAL Frontend UI   : https://$FrontendFqdn"
+Write-Host "🐘 INTERNAL pgAdmin UI    : https://$PgAdminFqdn"
+Write-Host "=========================================================="
+

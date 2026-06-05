@@ -11,6 +11,7 @@
     "bcryptjs": "^2.4.3",
     "fastify": "^4.28.1",
     "pg": "^8.12.0",
-    "redis": "^4.6.14"
+    "redis": "^4.6.14",
+    "@azure/identity": "^4.x.x"
   }
 }

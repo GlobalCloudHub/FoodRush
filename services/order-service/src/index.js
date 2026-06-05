@@ -65,6 +65,7 @@ async function main() {
 
   await app.register(swagger, {
     openapi: {
+      servers: [{ url: '/' }], // 🔥 ADD THIS LINE!
       info: { title: 'FoodRush Order Service', version: '1.0.0' },
       tags: [{ name: 'orders' }],
       components: { securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } } }
@@ -206,7 +207,7 @@ async function main() {
   })
 
   await app.listen({ port: Number(PORT), host: '0.0.0.0' })
-  console.log(`📦 Order Service on :${PORT} — Swagger: http://localhost:${PORT}/docs`)
+  console.log(`✅ Service started on port ${PORT} — Swagger available at /docs`)
 }
 
 main().catch(err => { console.error('💥 Order service crashed:', err); process.exit(1) })

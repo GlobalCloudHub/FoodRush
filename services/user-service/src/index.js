@@ -37,6 +37,7 @@ async function main() {
 
   await app.register(swagger, {
     openapi: {
+      servers: [{ url: '/' }], // 🔥 ADD THIS LINE!
       info: { title: 'FoodRush User Service', version: '1.0.0', description: 'User registration, login and profile management' },
       tags: [{ name: 'auth', description: 'Authentication endpoints' }, { name: 'users', description: 'User endpoints' }],
       components: {
@@ -61,7 +62,7 @@ async function main() {
         password: { type: 'string', minLength: 6 }, phone: { type: 'string' }, address: { type: 'string' }
       }},
       response: { 201: { type: 'object', properties: {
-        user: { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' }, email: { type: 'string' } } },
+        user: { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' }, email: { type: 'string' }, role: { type: 'string' } } },
         token: { type: 'string' }
       }}}
     }
@@ -74,7 +75,8 @@ async function main() {
       'INSERT INTO users (name, email, password_hash, phone, address) VALUES ($1,$2,$3,$4,$5) RETURNING id, name, email, role',
       [name, email, hash, phone || null, address || null]
     )
-    const token = app.jwt.sign({ id: rows[0].id, email: rows[0].email, role: rows[0].role }, { expiresIn: '7d' })
+    // ADDED NAME TO TOKEN
+    const token = app.jwt.sign({ id: rows[0].id, name: rows[0].name, email: rows[0].email, role: rows[0].role }, { expiresIn: '7d' })
     reply.code(201).send({ user: rows[0], token })
   })
 
@@ -95,8 +97,12 @@ async function main() {
     if (!rows.length) return reply.code(401).send({ error: 'Invalid credentials' })
     const valid = await bcrypt.compare(password, rows[0].password_hash)
     if (!valid) return reply.code(401).send({ error: 'Invalid credentials' })
-    const token = app.jwt.sign({ id: rows[0].id, email: rows[0].email, role: rows[0].role }, { expiresIn: '7d' })
+    
+    // ADDED NAME TO TOKEN (This fixes the React decode crash)
+    const token = app.jwt.sign({ id: rows[0].id, name: rows[0].name, email: rows[0].email, role: rows[0].role }, { expiresIn: '7d' })
     const { password_hash, ...user } = rows[0]
+    
+    console.log(`✅ User logged in: ${user.email} | Role: ${user.role}`)
     reply.send({ user, token })
   })
 
@@ -123,7 +129,8 @@ async function main() {
   })
 
   await app.listen({ port: Number(PORT), host: '0.0.0.0' })
-  console.log(`👤 User Service on :${PORT}  — Swagger: http://localhost:${PORT}/docs`)
+  console.log(`👤 User Service on :${PORT}  — Swagger available at /docs`)
+
 }
 
 main().catch(err => { console.error('💥 User service crashed:', err); process.exit(1) })
